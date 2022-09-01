@@ -43,6 +43,9 @@ def get_languages() -> dict:
     return langs
 
 
+LANG_COUNT = len(get_languages())
+
+
 def run_code(raw_code: str, compiler: str) -> tuple:
     # todo: compiler options?
     post_json = {
@@ -248,8 +251,8 @@ class CodeEntry(discord.ui.Modal, title='Enter your Code'):
 
 
 @client.tree.command(
-    description='Run your code (up to 4000 characters) and view its output right here in Discord! '
-                'Over 25 different languages supported each with several language versions.',
+    description='Run your code (up to 4000 characters) and view its output! '
+                f'{LANG_COUNT} different languages supported.',
     guild=SYNC_GUILD
 )
 async def code(inter: discord.Interaction):
