@@ -1,4 +1,5 @@
 # invite: https://discord.com/api/oauth2/authorize?client_id=1014899163361722399&permissions=277025409024&scope=bot%20applications.commands
+
 import typing
 from datetime import datetime, timezone
 import os
@@ -22,6 +23,7 @@ client = CodeRunnerClient()
 SYNC_GUILD = discord.Object(id=851838718318215208)
 
 
+# todo: add log messages
 def console_log_with_time(msg: str, **kwargs):
     print(f'[code] {datetime.now(tz=timezone.utc):%Y/%m/%d %H:%M:%S%z} - {msg}', **kwargs)
 
@@ -42,6 +44,7 @@ def get_languages() -> dict:
 
 
 def run_code(raw_code: str, compiler: str) -> tuple:
+    # todo: compiler options?
     post_json = {
         'code': raw_code,
         'options': '',
@@ -63,7 +66,7 @@ class LanguageSelectMenuView(discord.ui.View):
 
         self.language_dict = get_languages()
 
-        self.pages_req = len(self.language_dict) // 25 + 1
+        self.pages_req = len(self.language_dict) // 25 + 1  # Discord limits Select menus to 25 items
         self.current_page = 0
 
         langs = sorted(self.language_dict.keys())
@@ -89,7 +92,7 @@ class LanguageSelectMenuView(discord.ui.View):
         )
         self.btn_next.callback = self.btn_next_callback
 
-        if self.pages_req > 1:
+        if self.pages_req > 1:  # buttons required if more than one 'page'
             self.add_item(self.btn_back)
             self.add_item(self.btn_next)
 
@@ -136,10 +139,11 @@ class LanguageSelect(discord.ui.Select):
             min_values=1, max_values=1, row=0
         )
 
-        for i, key in enumerate(sorted_options):
-            if i > 24:  # cap on number of options
-                raise ValueError('A Select Object may only have 25 options')
-            self.add_option(label=key)
+        if len(sorted_options) > 25:
+            raise ValueError('A Select Object may only have 25 options')
+
+        for lang in sorted_options:
+            self.add_option(label=lang)
 
     async def callback(self, inter: discord.Interaction):
         selected_lang = self.values[0]
@@ -161,7 +165,7 @@ class VersionSelect(discord.ui.Select):
 
         super().__init__(placeholder='Select a language version', min_values=1, max_values=1)
 
-        for i, o in enumerate(language_dict[self.selected_language]):
+        for o in language_dict[self.selected_language]:
             self.add_option(label=o['name'], description=o['version'])
 
     async def callback(self, inter: discord.Interaction):
@@ -191,6 +195,7 @@ class CodeEntry(discord.ui.Modal, title='Enter your Code'):
 
     async def on_submit(self, inter: discord.Interaction):
         highlight_lang = self.language.split(" ")[0].lower()
+
         await self.origin_inter_to_edit.edit_original_response(
             content=f'{self.language} | {self.version}\n'
                     f'Code:\n```{highlight_lang}\n{self.code_entry}```',
