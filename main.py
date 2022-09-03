@@ -10,22 +10,35 @@ import discord
 from discord import app_commands
 
 
+# todo: add log messages
+def console_log_with_time(msg: str, **kwargs):
+    print(f'[code] {datetime.now(tz=timezone.utc):%Y/%m/%d %H:%M:%S%f%z} - {msg}', **kwargs)
+
+
 class CodeRunnerClient(discord.Client):
-    def __init__(self):
+    def __init__(self, guild_id: int):
         intents = discord.Intents.default()
         super().__init__(intents=intents)
 
         self.tree = app_commands.CommandTree(self)
+        self.dev_guild_id = guild_id
+        self.dev_sync_guild = discord.Object(id=self.dev_guild_id)
+
+    async def setup_hook(self):
+        # DEPLOY TODO: deploy = True
+        deploy = False
+        if deploy:
+            self.tree.clear_commands(guild=self.dev_sync_guild)  # clear local commands
+            await self.tree.sync(guild=self.dev_sync_guild)
+            await self.tree.sync()  # global sync
+        else:  # dev
+            self.tree.copy_global_to(guild=self.dev_sync_guild)
+            await self.tree.sync(guild=self.dev_sync_guild)
+
+        console_log_with_time(f'Commands synced with {deploy=}.')
 
 
-client = CodeRunnerClient()
-# DEPLOY TODO: change SYNC_GUILD to None for global sync
-SYNC_GUILD = discord.Object(id=851838718318215208)
-
-
-# todo: add log messages
-def console_log_with_time(msg: str, **kwargs):
-    print(f'[code] {datetime.now(tz=timezone.utc):%Y/%m/%d %H:%M:%S%z} - {msg}', **kwargs)
+client = CodeRunnerClient(851838718318215208)
 
 
 def get_api_list() -> list:
@@ -252,8 +265,7 @@ class CodeEntry(discord.ui.Modal, title='Enter your Code'):
 
 @client.tree.command(
     description='Run your code (up to 4000 characters) and view its output! '
-                f'{LANG_COUNT} different languages supported.',
-    guild=SYNC_GUILD
+                f'{LANG_COUNT} different languages supported.'
 )
 async def code(inter: discord.Interaction):
     await inter.response.send_message(
@@ -266,8 +278,6 @@ async def code(inter: discord.Interaction):
 @client.event
 async def on_ready():
     await client.change_presence(activity=discord.Game('with /code'))
-
-    await client.tree.sync(guild=SYNC_GUILD)
 
     console_log_with_time('Bot ready & running - hit me with code!')
 
