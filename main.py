@@ -74,6 +74,13 @@ def run_code(raw_code: str, compiler: str) -> tuple:
     return post.status_code, post.json()
 
 
+async def different_user_error(inter: discord.Interaction):
+    await inter.response.send_message(
+        content="You didn't initiate this interaction. Please use `/code` yourself to run your code.",
+        ephemeral=True
+    )
+
+
 # todo: generalise and make for version select too
 class LanguageSelectMenuView(discord.ui.View):
     def __init__(self, inter: discord.Interaction):
@@ -123,31 +130,34 @@ class LanguageSelectMenuView(discord.ui.View):
         await self.change_page(inter, 1)
 
     async def change_page(self, inter: discord.Interaction, change: int):
-        self.remove_item(self.lang_selects[self.current_page])
-        self.current_page += change
-        self.add_item(self.lang_selects[self.current_page])
+        if inter.user.id == self.origin_inter.user.id:
+            self.remove_item(self.lang_selects[self.current_page])
+            self.current_page += change
+            self.add_item(self.lang_selects[self.current_page])
 
-        if self.current_page == 0:
-            self.btn_back.disabled = True
+            if self.current_page == 0:
+                self.btn_back.disabled = True
+            else:
+                self.btn_back.disabled = False
+
+            if self.current_page == self.pages_req - 1:
+                self.btn_next.disabled = True
+            else:
+                self.btn_next.disabled = False
+
+            original_resp = await self.origin_inter.original_response()
+            await self.origin_inter.edit_original_response(
+                content=original_resp.content,
+                view=self,
+            )
+            await inter.response.defer()
         else:
-            self.btn_back.disabled = False
-
-        if self.current_page == self.pages_req - 1:
-            self.btn_next.disabled = True
-        else:
-            self.btn_next.disabled = False
-
-        original_resp = await self.origin_inter.original_response()
-        await self.origin_inter.edit_original_response(
-            content=original_resp.content,
-            view=self,
-        )
-        await inter.response.defer()
+            await different_user_error(inter)
 
 
 class LanguageSelect(discord.ui.Select):
     def __init__(self, inter: discord.Interaction, sorted_options: list, language_dict: dict, p: int):
-        self.origin_inter_to_edit = inter
+        self.origin_inter = inter
         self.language_dict = language_dict
 
         super().__init__(
@@ -162,21 +172,24 @@ class LanguageSelect(discord.ui.Select):
             self.add_option(label=lang)
 
     async def callback(self, inter: discord.Interaction):
-        selected_lang = self.values[0]
-        version_select_view = discord.ui.View()
-        version_select_view.add_item(VersionSelect(
-            self.origin_inter_to_edit, self.language_dict, selected_lang
-        ))
-        await self.origin_inter_to_edit.edit_original_response(
-            content='Select the language version.',
-            view=version_select_view
-        )
-        await inter.response.defer()
+        if inter.user.id == self.origin_inter.user.id:
+            selected_lang = self.values[0]
+            version_select_view = discord.ui.View()
+            version_select_view.add_item(VersionSelect(
+                self.origin_inter, self.language_dict, selected_lang
+            ))
+            await self.origin_inter.edit_original_response(
+                content='Select the language version.',
+                view=version_select_view
+            )
+            await inter.response.defer()
+        else:
+            await different_user_error(inter)
 
 
 class VersionSelect(discord.ui.Select):
     def __init__(self, inter: discord.Interaction, language_dict: dict, selected_language: str):
-        self.origin_inter_to_edit = inter
+        self.origin_inter = inter
         self.selected_language = selected_language
 
         super().__init__(placeholder='Select a language version', min_values=1, max_values=1)
@@ -185,10 +198,13 @@ class VersionSelect(discord.ui.Select):
             self.add_option(label=o['name'], description=o['version'])
 
     async def callback(self, inter: discord.Interaction):
-        selected_version = self.values[0]
-        await inter.response.send_modal(
-            CodeEntry(self.selected_language, selected_version, self.origin_inter_to_edit)
-        )
+        if inter.user.id == self.origin_inter.user.id:
+            selected_version = self.values[0]
+            await inter.response.send_modal(
+                CodeEntry(self.selected_language, selected_version, self.origin_inter)
+            )
+        else:
+            await different_user_error(inter)
 
 
 class RunResponse(typing.TypedDict):
@@ -264,8 +280,8 @@ class CodeEntry(discord.ui.Modal, title='Enter your Code'):
 
 
 @client.tree.command(
-    description='Run your code (up to 4000 characters) and view its output! '
-                f'{LANG_COUNT} different languages supported.'
+    description=f'Run your code in Discord with {LANG_COUNT} languages available! '
+                'Just run the command to get started.'[:100]
 )
 async def code(inter: discord.Interaction):
     await inter.response.send_message(
