@@ -31,11 +31,16 @@ class CodeRunnerClient(discord.Client):
             self.tree.clear_commands(guild=self.dev_sync_guild)  # clear local commands
             await self.tree.sync(guild=self.dev_sync_guild)
             await self.tree.sync()  # global sync
+            commands = await self.tree.fetch_commands()
         else:  # dev
             self.tree.copy_global_to(guild=self.dev_sync_guild)
             await self.tree.sync(guild=self.dev_sync_guild)
+            commands = await self.tree.fetch_commands(guild=self.dev_sync_guild)
 
-        console_log_with_time(f'Commands synced with {deploy=}.')
+        console_log_with_time(f'Commands synced with {deploy=}.'
+                              f'{" NB: Global commands may take an hour to appear." if deploy else ""}')
+        for c in commands:
+            console_log_with_time(f'Command ID {c.id} - "{c.name}" synced to Discord.')
 
 
 client = CodeRunnerClient(851838718318215208)
