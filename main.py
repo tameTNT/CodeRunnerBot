@@ -10,7 +10,6 @@ import discord
 from discord import app_commands
 
 
-# todo: add log messages
 def console_log_with_time(msg: str, **kwargs):
     print(f'[code] {datetime.now(tz=timezone.utc):%Y/%m/%d %H:%M:%S%f%z} - {msg}', **kwargs)
 
@@ -43,10 +42,11 @@ class CodeRunnerClient(discord.Client):
             console_log_with_time(f'Command ID {c.id} - "{c.name}" synced to Discord.')
 
 
-client = CodeRunnerClient(851838718318215208)
+client = CodeRunnerClient(851838718318215208)  # CompSoc Discord
 
 
 def get_api_list() -> list:
+    console_log_with_time('[api] GET list.json')
     return requests.get('https://wandbox.org/api/list.json').json()
 
 
@@ -72,14 +72,19 @@ def run_code(raw_code: str, compiler: str) -> tuple:
         'compiler': compiler,
         'compiler-option-raw': ''
     }
+    console_log_with_time('[api] POST compile.json')
     post = requests.post(
         'https://wandbox.org/api/compile.json',
         json=post_json, headers={'Content-type': 'application/json'}
     )
+
+    console_log_with_time(f'[api] POST returned status code {post.status_code}')
     return post.status_code, post.json()
 
 
 async def different_user_error(inter: discord.Interaction):
+    console_log_with_time(f"User {inter.user.id} tried to continue an interaction they didn't start.")
+
     await inter.response.send_message(
         content="You didn't initiate this interaction. Please use `/code` yourself to run your code.",
         ephemeral=True
@@ -156,6 +161,8 @@ class LanguageSelectMenuView(discord.ui.View):
                 view=self,
             )
             await inter.response.defer()
+
+            console_log_with_time(f'User {inter.user.id} changed to pg{self.current_page} for {self.__class__} object')
         else:
             await different_user_error(inter)
 
@@ -188,6 +195,8 @@ class LanguageSelect(discord.ui.Select):
                 view=version_select_view
             )
             await inter.response.defer()
+
+            console_log_with_time(f'User {inter.user.id} selected language: {selected_lang}')
         else:
             await different_user_error(inter)
 
@@ -208,6 +217,8 @@ class VersionSelect(discord.ui.Select):
             await inter.response.send_modal(
                 CodeEntry(self.selected_language, selected_version, self.origin_inter)
             )
+
+            console_log_with_time(f'User {inter.user.id} selected version: {selected_version}')
         else:
             await different_user_error(inter)
 
@@ -231,6 +242,8 @@ class CodeEntry(discord.ui.Modal, title='Enter your Code'):
         self.origin_inter_to_edit = origin_inter_to_edit
 
     async def on_submit(self, inter: discord.Interaction):
+        console_log_with_time(f'User {inter.user.id} submitted a code modal')
+
         highlight_lang = self.language.split(" ")[0].lower()
 
         await self.origin_inter_to_edit.edit_original_response(
@@ -283,12 +296,15 @@ class CodeEntry(discord.ui.Modal, title='Enter your Code'):
 
             await inter.followup.send(embed=result_embed)
 
+        console_log_with_time(f'Code run result sent in response to user {inter.user.id}')
+
 
 @client.tree.command(
     description=f'Run your code in Discord with {LANG_COUNT} languages available! '
                 'Just run the command to get started.'[:100]
 )
 async def code(inter: discord.Interaction):
+    console_log_with_time(f'/code command run by user {inter.user.id} in guild {inter.guild_id}')
     await inter.response.send_message(
         content='Please select a language to run your code with.\n*Use the buttons to see more languages.* '
                 '(Discord limits the dropdown to 25 items 🥲)',
