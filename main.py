@@ -1,5 +1,7 @@
 # invite: https://discord.com/api/oauth2/authorize?client_id=1014899163361722399&permissions=277025409024&scope=bot%20applications.commands
 
+from __future__ import annotations
+
 import typing
 from datetime import datetime, timezone
 import os
@@ -65,14 +67,14 @@ LANG_COUNT = len(get_languages())
 
 
 def run_code(raw_code: str, compiler: str) -> tuple:
-    # todo: compiler options?
+    # todo: compiler options? (mainly for C stuff)
     post_json = {
         'code': raw_code,
         'options': '',
         'compiler': compiler,
         'compiler-option-raw': ''
     }
-    console_log_with_time('[api] POST compile.json')
+    console_log_with_time(f'[api] POST compile.json with compiler: {compiler}')
     post = requests.post(
         'https://wandbox.org/api/compile.json',
         json=post_json, headers={'Content-type': 'application/json'}
@@ -91,23 +93,29 @@ async def different_user_error(inter: discord.Interaction):
     )
 
 
-# todo: generalise and make for version select too
-class LanguageSelectMenuView(discord.ui.View):
-    def __init__(self, inter: discord.Interaction):
+class MultiPageSelectView(discord.ui.View):
+    # noinspection PyPep8Naming
+    def __init__(self, inter: discord.Interaction, SelectClass: typing.Type[LanguageSelect | VersionSelect],
+                 num_options: int = LANG_COUNT, selection: str = ''):
         super().__init__()
         self.origin_inter = inter
 
         self.language_dict = get_languages()
+        sorted_langs = sorted(self.language_dict.keys())
 
-        self.pages_req = len(self.language_dict) // 25 + 1  # Discord limits Select menus to 25 items
+        if SelectClass == LanguageSelect:
+            num_options = len(self.language_dict)  # override in case of update
+
+        self.pages_req = num_options // 25 + 1  # Discord limits Select menus to 25 items
         self.current_page = 0
 
-        langs = sorted(self.language_dict.keys())
-        self.lang_selects = []
-        for p in range(self.pages_req):
-            self.lang_selects.append(LanguageSelect(
-                inter, langs[p*25:(p+1)*25], self.language_dict, p
-            ))
+        self.select_objects = []
+        for page_num in range(self.pages_req):
+            self.select_objects.append(
+                SelectClass(inter, self.language_dict, page_num,  # <- default arguments for both SelectClasses
+                            sorted_options=sorted_langs[page_num * 25:(page_num + 1) * 25], language=selection)
+                # non-default arguments^ , sorted_options for LanguageSelect and selected_language for VersionSelect
+            )
 
         self.btn_back = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
@@ -131,7 +139,7 @@ class LanguageSelectMenuView(discord.ui.View):
 
             self.btn_next.disabled = False
 
-        self.add_item(self.lang_selects[self.current_page])
+        self.add_item(self.select_objects[self.current_page])
 
     async def btn_back_callback(self, inter: discord.Interaction):
         await self.change_page(inter, -1)
@@ -141,9 +149,9 @@ class LanguageSelectMenuView(discord.ui.View):
 
     async def change_page(self, inter: discord.Interaction, change: int):
         if inter.user.id == self.origin_inter.user.id:
-            self.remove_item(self.lang_selects[self.current_page])
+            self.remove_item(self.select_objects[self.current_page])
             self.current_page += change
-            self.add_item(self.lang_selects[self.current_page])
+            self.add_item(self.select_objects[self.current_page])
 
             if self.current_page == 0:
                 self.btn_back.disabled = True
@@ -162,23 +170,21 @@ class LanguageSelectMenuView(discord.ui.View):
             )
             await inter.response.defer()
 
-            console_log_with_time(f'User {inter.user.id} changed to pg{self.current_page} for {self.__class__} object')
+            console_log_with_time(f'User {inter.user.id} changed to pg.{self.current_page+1} for {self.__class__}')
         else:
             await different_user_error(inter)
 
 
 class LanguageSelect(discord.ui.Select):
-    def __init__(self, inter: discord.Interaction, sorted_options: list, language_dict: dict, p: int):
+    def __init__(self, inter: discord.Interaction, language_dict: dict, page_num: int,
+                 sorted_options: list, **kwargs):  # kwargs req. to accept argument potentially meant for other Select
         self.origin_inter = inter
         self.language_dict = language_dict
 
         super().__init__(
-            placeholder=f'[{p+1}] Select a programming language',
+            placeholder=f'[{page_num + 1}] Select a programming language',
             min_values=1, max_values=1, row=0
         )
-
-        if len(sorted_options) > 25:
-            raise ValueError('A Select Object may only have 25 options')
 
         for lang in sorted_options:
             self.add_option(label=lang)
@@ -186,10 +192,8 @@ class LanguageSelect(discord.ui.Select):
     async def callback(self, inter: discord.Interaction):
         if inter.user.id == self.origin_inter.user.id:
             selected_lang = self.values[0]
-            version_select_view = discord.ui.View()
-            version_select_view.add_item(VersionSelect(
-                self.origin_inter, self.language_dict, selected_lang
-            ))
+            version_select_view = MultiPageSelectView(self.origin_inter, VersionSelect,
+                                                      len(self.language_dict[selected_lang]), selected_lang)
             await self.origin_inter.edit_original_response(
                 content='Select the language version.',
                 view=version_select_view
@@ -202,11 +206,15 @@ class LanguageSelect(discord.ui.Select):
 
 
 class VersionSelect(discord.ui.Select):
-    def __init__(self, inter: discord.Interaction, language_dict: dict, selected_language: str):
+    def __init__(self, inter: discord.Interaction, language_dict: dict, page_num: int,
+                 language: str, **kwargs):
         self.origin_inter = inter
-        self.selected_language = selected_language
+        self.selected_language = language
 
-        super().__init__(placeholder='Select a language version', min_values=1, max_values=1)
+        super().__init__(
+            placeholder=f'[{page_num + 1}] Select a language version',
+            min_values=1, max_values=1, row=0
+        )
 
         for o in language_dict[self.selected_language]:
             self.add_option(label=o['name'], description=o['version'])
@@ -306,9 +314,9 @@ class CodeEntry(discord.ui.Modal, title='Enter your Code'):
 async def code(inter: discord.Interaction):
     console_log_with_time(f'/code command run by user {inter.user.id} in guild {inter.guild_id}')
     await inter.response.send_message(
-        content='Please select a language to run your code with.\n*Use the buttons to see more languages.* '
-                '(Discord limits the dropdown to 25 items 🥲)',
-        view=LanguageSelectMenuView(inter), ephemeral=False
+        content='Please select a language to run your code with.\n*Use the buttons to see more languages. '
+                '(Discord limits the dropdown to 25 items 🥲)*',
+        view=MultiPageSelectView(inter, LanguageSelect), ephemeral=False
     )
 
 
