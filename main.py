@@ -96,9 +96,10 @@ async def different_user_error(inter: discord.Interaction):
 class MultiPageSelectView(discord.ui.View):
     # noinspection PyPep8Naming
     def __init__(self, inter: discord.Interaction, SelectClass: typing.Type[LanguageSelect | VersionSelect],
-                 num_options: int = LANG_COUNT, selection: str = ''):
+                 code_src: str, num_options: int = LANG_COUNT, selection: str = ''):
         super().__init__()
         self.origin_inter = inter
+        self.code_src = code_src
 
         self.language_dict = get_languages()
         sorted_langs = sorted(self.language_dict.keys())
@@ -112,7 +113,7 @@ class MultiPageSelectView(discord.ui.View):
         self.select_objects = []
         for page_num in range(self.pages_req):
             self.select_objects.append(
-                SelectClass(inter, self.language_dict, page_num,  # <- default arguments for both SelectClasses
+                SelectClass(inter, self.language_dict, page_num, code_src,  # <- pos defaults for both SelectClasses
                             sorted_options=sorted_langs[page_num * 25:(page_num + 1) * 25], language=selection)
                 # non-default arguments^ , sorted_options for LanguageSelect and selected_language for VersionSelect
             )
@@ -176,10 +177,11 @@ class MultiPageSelectView(discord.ui.View):
 
 
 class LanguageSelect(discord.ui.Select):
-    def __init__(self, inter: discord.Interaction, language_dict: dict, page_num: int,
+    def __init__(self, inter: discord.Interaction, language_dict: dict, page_num: int, code_src: str,
                  sorted_options: list, **kwargs):  # kwargs req. to accept argument potentially meant for other Select
         self.origin_inter = inter
         self.language_dict = language_dict
+        self.code_src = code_src
 
         super().__init__(
             placeholder=f'[{page_num + 1}] Select a programming language',
@@ -192,7 +194,7 @@ class LanguageSelect(discord.ui.Select):
     async def callback(self, inter: discord.Interaction):
         if inter.user.id == self.origin_inter.user.id:
             selected_lang = self.values[0]
-            version_select_view = MultiPageSelectView(self.origin_inter, VersionSelect,
+            version_select_view = MultiPageSelectView(self.origin_inter, VersionSelect, self.code_src,
                                                       len(self.language_dict[selected_lang]), selected_lang)
             await self.origin_inter.edit_original_response(
                 content='Select the language version.',
@@ -206,10 +208,11 @@ class LanguageSelect(discord.ui.Select):
 
 
 class VersionSelect(discord.ui.Select):
-    def __init__(self, inter: discord.Interaction, language_dict: dict, page_num: int,
+    def __init__(self, inter: discord.Interaction, language_dict: dict, page_num: int, code_src: str,
                  language: str, **kwargs):
         self.origin_inter = inter
         self.selected_language = language
+        self.code_src = code_src
 
         super().__init__(
             placeholder=f'[{page_num + 1}] Select a language version',
@@ -222,9 +225,10 @@ class VersionSelect(discord.ui.Select):
     async def callback(self, inter: discord.Interaction):
         if inter.user.id == self.origin_inter.user.id:
             selected_version = self.values[0]
-            await inter.response.send_modal(
-                CodeEntry(self.selected_language, selected_version, self.origin_inter)
-            )
+            if self.code_src:
+                await send_code(inter, self.selected_language, selected_version, self.origin_inter, self.code_src)
+            else:
+                await inter.response.send_modal(CodeEntry(self.selected_language, selected_version, self.origin_inter))
 
             console_log_with_time(f'User {inter.user.id} selected version: {selected_version}')
         else:
@@ -240,6 +244,73 @@ class RunResponse(typing.TypedDict):
     program_message: str
 
 
+async def send_code(inter: discord.Interaction, language: str, version: str,
+                    inter_to_edit: discord.Interaction, code_str: str):
+
+    await inter.response.defer(thinking=True)
+
+    highlight_lang = language.split(" ")[0].lower()
+
+    if inter_to_edit:
+        console_log_with_time('Writing code to file and editing original interaction response...')
+        with open('temp.txt', 'w', encoding='utf-8') as fobj:
+            fobj.write(code_str)
+
+        # noinspection PyTypeChecker
+        await inter_to_edit.edit_original_response(
+            content=f'{language} | {version}\nCode:\n```{highlight_lang}\n{code_str}```',
+            attachments=[discord.File(open('temp.txt', 'rb'), filename='code.txt')],
+            view=None
+        )
+
+    error = ''
+    result: RunResponse = dict()
+    try:
+        status, result = run_code(code_str, version)
+    except Exception as e:
+        error = str(e)
+    else:
+        if status != 200:
+            error = f'The POST request received a status of {status}.'
+
+    if error:
+        await inter.followup.send(
+            content='The *request* to run your code failed (i.e. **not** the code itself).\n'
+                    f'The following exception was raised by the program:\n```{error}```')
+    else:
+        if 'status' not in result and 'signal' in result:
+            result['status'] = result['signal']
+
+        if int(result['status']) == 0:
+            result_colour = discord.Colour.green()
+        elif int(result['status']) == 1:
+            result_colour = discord.Colour.red()
+        else:
+            result_colour = discord.Colour.blurple()
+
+        result_embed = discord.Embed(
+            title='💻 Code Runner Result',
+            colour=result_colour
+        )
+
+        code_fenced_results = dict(map(
+            lambda t: (t[0], f'```{highlight_lang}\n{t[1]}```') if t[1] else (t[0], '—'), result.items()
+        ))
+        code_fenced_results['status'] = result['status']
+
+        for field, s in code_fenced_results.items():
+            result_embed.add_field(name=field.replace('_', ' ').title(), value=s, inline=False)
+
+        result_embed.set_footer(text=f'Code run at {datetime.now(tz=timezone.utc):%Y/%m/%d %H:%M:%S%z}')
+
+        rerun_btn = discord.ui.View()  # todo: same code/compiler run again button
+        # rerun_btn.add_item(ReRunButton(language, version))
+
+        await inter.followup.send(embed=result_embed, view=rerun_btn)
+
+    console_log_with_time(f'Code run result sent in response to user {inter.user.id}')
+
+
 class CodeEntry(discord.ui.Modal, title='Enter your Code'):
     code_entry = discord.ui.TextInput(label='Code', style=discord.TextStyle.paragraph)
 
@@ -251,72 +322,78 @@ class CodeEntry(discord.ui.Modal, title='Enter your Code'):
 
     async def on_submit(self, inter: discord.Interaction):
         console_log_with_time(f'User {inter.user.id} submitted a code modal')
-
-        highlight_lang = self.language.split(" ")[0].lower()
-
-        await self.origin_inter_to_edit.edit_original_response(
-            content=f'{self.language} | {self.version}\n'
-                    f'Code:\n```{highlight_lang}\n{self.code_entry}```',
-            view=None
-        )
-
-        await inter.response.defer(thinking=True)
-
-        error = ''
-        result: RunResponse = dict()
-        try:
-            status, result = run_code(str(self.code_entry), self.version)
-        except Exception as e:
-            error = str(e)
-        else:
-            if status != 200:
-                error = f'The POST request received a status of {status}.'
-
-        if error:
-            await inter.followup.send(
-                content='The *request* to run your code failed (i.e. **not** the code itself).\n'
-                        f'The following exception was raised by the program:\n```{error}```')
-        else:
-            if 'status' not in result and 'signal' in result:
-                result['status'] = result['signal']
-
-            if int(result['status']) == 0:
-                result_colour = discord.Colour.green()
-            elif int(result['status']) == 1:
-                result_colour = discord.Colour.red()
-            else:
-                result_colour = discord.Colour.blurple()
-
-            result_embed = discord.Embed(
-                title='💻 Code Runner Result',
-                colour=result_colour
-            )
-
-            code_fenced_results = dict(map(
-                lambda t: (t[0], f'```{highlight_lang}\n{t[1]}```') if t[1] else (t[0], '—'), result.items()
-            ))
-            code_fenced_results['status'] = result['status']
-
-            for field, s in code_fenced_results.items():
-                result_embed.add_field(name=field.replace('_', ' ').title(), value=s, inline=False)
-
-            result_embed.set_footer(text=f'Code run at {datetime.now(tz=timezone.utc):%Y/%m/%d %H:%M:%S%z}')
-
-            await inter.followup.send(embed=result_embed)
-
-        console_log_with_time(f'Code run result sent in response to user {inter.user.id}')
+        await send_code(inter, self.language, self.version, self.origin_inter_to_edit, str(self.code_entry))
 
 
 @client.tree.command(
     description=f'Run your code in Discord with {LANG_COUNT} languages available! '
                 'Just run the command to get started.'[:100]
 )
-async def code(inter: discord.Interaction):
-    console_log_with_time(f'/code command run by user {inter.user.id} in guild {inter.guild_id}')
-    await inter.response.send_message(
+@discord.app_commands.describe(
+    file='UTF-8 encoded text file to read code from (e.g. .py, .js)',
+    pastebin='https://pastebin.com/ link to read code from (e.g. https://pastebin.com/N3yL4Ugk)'
+)
+async def code(inter: discord.Interaction, file: typing.Optional[discord.Attachment], pastebin: typing.Optional[str]):
+
+    console_log_with_time(f'/code command run by user {inter.user.id} in guild {inter.guild_id}. '
+                          f'Using: {"file option" if file else ""} {"pastebin" if pastebin else ""}')
+
+    code_src = None
+
+    await inter.response.defer(thinking=True)
+
+    if file and pastebin:
+        await inter.followup.send(
+            content='`file` and `pastebin` are mutually exclusive options. Please use just one.', ephemeral=True
+        )
+        return
+
+    elif file:
+        console_log_with_time('Reading and decoding file.')
+        code_bytes = await file.read()
+        try:
+            code_src = code_bytes.decode('utf-8')
+        except UnicodeError:
+            raise UnicodeError('There was an error decoding the file. '
+                               'Make sure the file contains only utf-8 encoded text.')
+
+    elif pastebin:
+        console_log_with_time('Reading and decoding pastebin url.')
+        url = pastebin
+        raw_url_start = 'https://pastebin.com/raw/'
+        if not pastebin.startswith(raw_url_start):
+            url = raw_url_start + pastebin.split('/')[-1]
+
+        error = f"Pastebin url ({url}) couldn't be resolved."
+        resp = requests.Response
+        resp.status_code = 0
+        try:
+            console_log_with_time(f'Getting {url}...')
+            resp = requests.get(url)
+        except Exception as e:
+            error += f'\n{e}'
+
+        if resp.status_code == 200:
+            error = ''
+
+        if error:
+            raise ValueError(error)
+        else:
+            code_src = resp.text
+
+    await inter.followup.send(
         content='Please select a language to run your code with.\n*Use the buttons to see more languages. '
                 '(Discord limits the dropdown to 25 items 🥲)*',
-        view=MultiPageSelectView(inter, LanguageSelect), ephemeral=False
+        view=MultiPageSelectView(inter, LanguageSelect, code_src), ephemeral=False
+    )
+
+
+@code.error
+async def code_error(inter: discord.Interaction, err: discord.app_commands.AppCommandError):
+    console_log_with_time(f'Error with `/code` command: {err!s}')
+    await inter.followup.send(
+        content=str(err),
+        ephemeral=False
     )
 
 
