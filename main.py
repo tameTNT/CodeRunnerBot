@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
 import os
 import typing
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import requests
-
 import discord
+import requests
 from discord import app_commands
 
 
@@ -261,7 +260,7 @@ async def send_code(inter: discord.Interaction, language: str, version: str,
     highlight_lang = language.split(" ")[0].lower()
 
     console_log_with_time('Writing code to file')
-    temp_file = Path(f'./temp/{inter.user.id}.txt')
+    temp_file = Path(f'./code/temp/{inter.user.id}.txt')
     with temp_file.open('w', encoding='utf-8') as fobj:
         fobj.write(code_str)
 
