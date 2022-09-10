@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import typing
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
+import typing
+from pathlib import Path
 
 import requests
 
@@ -66,7 +67,16 @@ def get_languages() -> dict:
 LANG_COUNT = len(get_languages())
 
 
-def run_code(raw_code: str, compiler: str) -> tuple:
+class RunResponse(typing.TypedDict):
+    status: str
+    compiler_output: str
+    compiler_error: str
+    program_output: str
+    program_error: str
+    program_message: str
+
+
+def run_code(raw_code: str, compiler: str, timelimit: int = 10) -> typing.Tuple[requests.Response, RunResponse]:
     # todo: compiler options? (mainly for C stuff)
     post_json = {
         'code': raw_code,
@@ -75,13 +85,24 @@ def run_code(raw_code: str, compiler: str) -> tuple:
         'compiler-option-raw': ''
     }
     console_log_with_time(f'[api] POST compile.json with compiler: {compiler}')
+
     post = requests.post(
-        'https://wandbox.org/api/compile.json',
+        'https://wandbox.org/api/compile.json', timeout=timelimit,
         json=post_json, headers={'Content-type': 'application/json'}
     )
-
-    console_log_with_time(f'[api] POST returned status code {post.status_code}')
-    return post.status_code, post.json()
+    if post.elapsed >= timedelta(seconds=timelimit):
+        console_log_with_time(f'Code-running POST request timed out after {timelimit}s')
+        return post, {
+            'status': 'timeout',
+            'compiler_output': '',
+            'compiler_error': '',
+            'program_output': f'Your code took longer than {timelimit} seconds to run and was timed out.',
+            'program_error': '',
+            'program_message': ''
+        }
+    else:
+        console_log_with_time(f'[api] POST returned status code {post.status_code}')
+        return post, post.json()
 
 
 async def different_user_error(inter: discord.Interaction):
@@ -251,62 +272,67 @@ async def send_code(inter: discord.Interaction, language: str, version: str,
 
     highlight_lang = language.split(" ")[0].lower()
 
-    if inter_to_edit:
-        console_log_with_time('Writing code to file and editing original interaction response...')
-        with open('temp.txt', 'w', encoding='utf-8') as fobj:
-            fobj.write(code_str)
+    console_log_with_time('Writing code to file')
+    temp_file = Path(f'./temp/{inter.user.id}.txt')
+    with temp_file.open('w', encoding='utf-8') as fobj:
+        fobj.write(code_str)
 
-        # noinspection PyTypeChecker
-        await inter_to_edit.edit_original_response(
-            content=f'{language} | {version}\nCode:\n```{highlight_lang}\n{code_str}```',
-            attachments=[discord.File(open('temp.txt', 'rb'), filename='code.txt')],
-            view=None
-        )
+    response_str = f'{language} | {version}\nCode:\n```{highlight_lang}\n{code_str}```'[:2000]
+    # noinspection PyTypeChecker
+    attachments = [discord.File(temp_file.open('rb'), filename='full_code.txt')]
+
+    console_log_with_time('Updating relevant interaction...')
+    await inter_to_edit.edit_original_response(content=response_str, attachments=attachments, view=None)
+
+    del attachments
+    temp_file.unlink(missing_ok=True)
 
     error = ''
     result: RunResponse = dict()
     try:
-        status, result = run_code(code_str, version)
+        resp, result = run_code(code_str, version)
     except Exception as e:
         error = str(e)
     else:
-        if status != 200:
-            error = f'The POST request received a status of {status}.'
+        if not resp.ok:
+            error = f'The POST request received a status of {resp.status_code}.'
 
     if error:
+        console_log_with_time(f'Code run request failed: {error}')
         await inter.followup.send(
-            content='The *request* to run your code failed (i.e. **not** the code itself).\n'
+            content='The **request** to run your code failed (i.e. **not** the code itself).\n'
                     f'The following exception was raised by the program:\n```{error}```')
+        return
+
+    if 'status' not in result and 'signal' in result:
+        result['status'] = result['signal']
+        del result['signal']
+
+    if result['status'] == 'Killed':
+        result_colour = discord.Colour.gold()
+    elif int(result['status']) == 0:
+        result_colour = discord.Colour.green()
+    elif int(result['status']) == 1:
+        result_colour = discord.Colour.red()
     else:
-        if 'status' not in result and 'signal' in result:
-            result['status'] = result['signal']
+        result_colour = discord.Colour.blurple()
 
-        if int(result['status']) == 0:
-            result_colour = discord.Colour.green()
-        elif int(result['status']) == 1:
-            result_colour = discord.Colour.red()
-        else:
-            result_colour = discord.Colour.blurple()
+    result_embed = discord.Embed(
+        title='💻 Code Runner Result',
+        colour=result_colour
+    )
 
-        result_embed = discord.Embed(
-            title='💻 Code Runner Result',
-            colour=result_colour
-        )
+    code_fenced_results = dict(map(
+        lambda t: (t[0], f'```{highlight_lang}\n{t[1]}```') if t[1] else (t[0], '—'), result.items()
+    ))
+    code_fenced_results['status'] = result['status']
 
-        code_fenced_results = dict(map(
-            lambda t: (t[0], f'```{highlight_lang}\n{t[1]}```') if t[1] else (t[0], '—'), result.items()
-        ))
-        code_fenced_results['status'] = result['status']
+    for field, s in code_fenced_results.items():
+        result_embed.add_field(name=field.replace('_', ' ').title()[:256], value=s[:1024], inline=False)
 
-        for field, s in code_fenced_results.items():
-            result_embed.add_field(name=field.replace('_', ' ').title(), value=s, inline=False)
+    result_embed.set_footer(text=f'Code run at {datetime.now(tz=timezone.utc):%Y/%m/%d %H:%M:%S%z}')
 
-        result_embed.set_footer(text=f'Code run at {datetime.now(tz=timezone.utc):%Y/%m/%d %H:%M:%S%z}')
-
-        rerun_btn = discord.ui.View()  # todo: same code/compiler run again button
-        # rerun_btn.add_item(ReRunButton(language, version))
-
-        await inter.followup.send(embed=result_embed, view=rerun_btn)
+    await inter.followup.send(embed=result_embed)
 
     console_log_with_time(f'Code run result sent in response to user {inter.user.id}')
 
@@ -349,7 +375,7 @@ async def code(inter: discord.Interaction, file: typing.Optional[discord.Attachm
         return
 
     elif file:
-        console_log_with_time('Reading and decoding file.')
+        console_log_with_time('Reading and decoding attachment file.')
         code_bytes = await file.read()
         try:
             code_src = code_bytes.decode('utf-8')
@@ -373,7 +399,7 @@ async def code(inter: discord.Interaction, file: typing.Optional[discord.Attachm
         except Exception as e:
             error += f'\n{e}'
 
-        if resp.status_code == 200:
+        if resp.ok:
             error = ''
 
         if error:
