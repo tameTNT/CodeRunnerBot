@@ -163,6 +163,12 @@ class MultiPageSelectView(discord.ui.View):
 
         self.add_item(self.select_objects[self.current_page])
 
+    async def interaction_check(self, inter: discord.Interaction) -> bool:
+        if inter.user != self.origin_inter.user:
+            await different_user_error(inter)
+            return False
+        return True
+
     async def btn_back_callback(self, inter: discord.Interaction):
         await self.change_page(inter, -1)
 
@@ -170,31 +176,28 @@ class MultiPageSelectView(discord.ui.View):
         await self.change_page(inter, 1)
 
     async def change_page(self, inter: discord.Interaction, change: int):
-        if inter.user.id == self.origin_inter.user.id:
-            self.remove_item(self.select_objects[self.current_page])
-            self.current_page += change
-            self.add_item(self.select_objects[self.current_page])
+        self.remove_item(self.select_objects[self.current_page])
+        self.current_page += change
+        self.add_item(self.select_objects[self.current_page])
 
-            if self.current_page == 0:
-                self.btn_back.disabled = True
-            else:
-                self.btn_back.disabled = False
-
-            if self.current_page == self.pages_req - 1:
-                self.btn_next.disabled = True
-            else:
-                self.btn_next.disabled = False
-
-            original_resp = await self.origin_inter.original_response()
-            await self.origin_inter.edit_original_response(
-                content=original_resp.content,
-                view=self,
-            )
-            await inter.response.defer()
-
-            console_log_with_time(f'User {inter.user.id} changed to pg.{self.current_page+1} for {self.__class__}')
+        if self.current_page == 0:
+            self.btn_back.disabled = True
         else:
-            await different_user_error(inter)
+            self.btn_back.disabled = False
+
+        if self.current_page == self.pages_req - 1:
+            self.btn_next.disabled = True
+        else:
+            self.btn_next.disabled = False
+
+        original_resp = await self.origin_inter.original_response()
+        await self.origin_inter.edit_original_response(
+            content=original_resp.content,
+            view=self,
+        )
+        await inter.response.defer()
+
+        console_log_with_time(f'User {inter.user.id} changed to pg.{self.current_page+1} for {self.__class__}')
 
 
 class LanguageSelect(discord.ui.Select):
@@ -213,19 +216,16 @@ class LanguageSelect(discord.ui.Select):
             self.add_option(label=lang)
 
     async def callback(self, inter: discord.Interaction):
-        if inter.user.id == self.origin_inter.user.id:
-            selected_lang = self.values[0]
-            version_select_view = MultiPageSelectView(self.origin_inter, VersionSelect, self.code_src,
-                                                      len(self.language_dict[selected_lang]), selected_lang)
-            await self.origin_inter.edit_original_response(
-                content='Select the language version.',
-                view=version_select_view
-            )
-            await inter.response.defer()
+        selected_lang = self.values[0]
+        version_select_view = MultiPageSelectView(self.origin_inter, VersionSelect, self.code_src,
+                                                  len(self.language_dict[selected_lang]), selected_lang)
+        await self.origin_inter.edit_original_response(
+            content='Select the language version.',
+            view=version_select_view
+        )
+        await inter.response.defer()
 
-            console_log_with_time(f'User {inter.user.id} selected language: {selected_lang}')
-        else:
-            await different_user_error(inter)
+        console_log_with_time(f'User {inter.user.id} selected language: {selected_lang}')
 
 
 class VersionSelect(discord.ui.Select):
@@ -244,25 +244,13 @@ class VersionSelect(discord.ui.Select):
             self.add_option(label=o['name'], description=o['version'])
 
     async def callback(self, inter: discord.Interaction):
-        if inter.user.id == self.origin_inter.user.id:
-            selected_version = self.values[0]
-            if self.code_src:
-                await send_code(inter, self.selected_language, selected_version, self.origin_inter, self.code_src)
-            else:
-                await inter.response.send_modal(CodeEntry(self.selected_language, selected_version, self.origin_inter))
-
-            console_log_with_time(f'User {inter.user.id} selected version: {selected_version}')
+        selected_version = self.values[0]
+        if self.code_src:
+            await send_code(inter, self.selected_language, selected_version, self.origin_inter, self.code_src)
         else:
-            await different_user_error(inter)
+            await inter.response.send_modal(CodeEntry(self.selected_language, selected_version, self.origin_inter))
 
-
-class RunResponse(typing.TypedDict):
-    status: str
-    compiler_output: str
-    compiler_error: str
-    program_output: str
-    program_error: str
-    program_message: str
+        console_log_with_time(f'User {inter.user.id} selected version: {selected_version}')
 
 
 async def send_code(inter: discord.Interaction, language: str, version: str,
